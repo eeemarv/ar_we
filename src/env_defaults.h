@@ -70,8 +70,8 @@
 #ifndef WATER_TEMP_MAX_SAMPLES
 #define WATER_TEMP_MAX_SAMPLES 64
 #endif
-#ifndef NTP_SERVER
-#define NTP_SERVER "eu.pool.ntp.org"
+#ifndef NTP_POOL
+#define NTP_POOL "pool.ntp.org"
 #endif
 #ifndef NTP_INTERVAL
 #define NTP_INTERVAL 7200000 // 2 hours
