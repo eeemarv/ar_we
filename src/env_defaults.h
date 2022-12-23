@@ -1,5 +1,5 @@
 #ifndef MAC_4_LAST
-  #define MAC_4_LAST 0xbe, 0xef, 0x13, 0x01
+#define MAC_4_LAST 0xbe, 0xef, 0x13, 0x01
 #endif
 #ifndef MQTT_PORT
 #define MQTT_PORT 1883
@@ -68,7 +68,7 @@
 #define WATER_TEMP_MIN_SAMPLES 4
 #endif
 #ifndef WATER_TEMP_MAX_SAMPLES
-#define WATER_TEMP_MAX_SAMPLES 64
+#define WATER_TEMP_MAX_SAMPLES 16
 #endif
 #ifndef NTP_POOL
 #define NTP_POOL "pool.ntp.org"

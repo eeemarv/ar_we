@@ -20,6 +20,7 @@
 #define THINGSPEAK_SERV "api.thingspeak.com"
 #define THINGSPEAK_LOC "/update"
 #define THINGSPEAK_TIMEOUT 2000
+#define TEMP_MUL 100
 
 #define T_NEXT_REQUEST(REQUEST_STATUS, REQUEST_INTERVAL) \
   requestStatus = REQUEST_STATUS;                        \
@@ -50,12 +51,12 @@ char postBody[1024];
 char m1[12];
 char m2[12];
 
-float waterTemp;
 float airTemp;
 bool waterTempReady = false;
 bool airTempReady = false;
-float waterTempAcc = 0;
-float waterTempBuff[WATER_TEMP_MAX_SAMPLES];
+char waterTempChar[8];
+int32_t waterTempAcc = 0;
+int16_t waterTempBuff[WATER_TEMP_MAX_SAMPLES];
 uint8_t waterTempBuffIndex = 0;
 uint8_t waterTempBuffSize = 0;
 uint32_t lastWaterTempSample = 0;
@@ -65,7 +66,7 @@ uint32_t lastAirTempPub = 0;
 uint32_t lastPresencePub = 0;
 
 void mqttCallback(char *topic, uint8_t *payload, unsigned int length){
-  float newSample;
+  int16_t newSample;
   uint8_t iii;
 
   char *msg = reinterpret_cast<char *>(payload);
@@ -80,7 +81,7 @@ void mqttCallback(char *topic, uint8_t *payload, unsigned int length){
 
   if (strcmp(topic, SUB_WATER_TEMP) == 0){
     msg[length] = '\0';
-    newSample = atof(msg);
+    newSample = (int16_t) floor(atof(msg) * TEMP_MUL);
     waterTempAcc += newSample;
     if (waterTempBuffSize == WATER_TEMP_MAX_SAMPLES){
       waterTempAcc -= waterTempBuff[waterTempBuffIndex];
@@ -96,7 +97,6 @@ void mqttCallback(char *topic, uint8_t *payload, unsigned int length){
     }
 
     if (waterTempBuffSize >= WATER_TEMP_MIN_SAMPLES) {
-      waterTemp = waterTempAcc / waterTempBuffSize;
       waterTempReady = true;
       lastWaterTempSample = millis();
     }
@@ -119,6 +119,23 @@ inline bool mqttReconnect()
     mqttClient.subscribe(SUB_WATER_TEMP);
   }
   return mqttClient.connected();
+}
+
+inline void calcWaterTempChar(){
+  uint16_t div;
+  uint8_t len;
+  div = waterTempBuffSize * TEMP_MUL;
+  itoa(waterTempAcc / div, waterTempChar, 10);
+  strcat(waterTempChar, ".");
+  itoa((waterTempAcc % div) / waterTempBuffSize, m2, 10);
+  len = strlen(m2);
+  if (len < 2){
+    strcat(waterTempChar, "0");
+    if (len == 0){
+      strcat(waterTempChar, "0");      
+    }
+  }
+  strcat(waterTempChar, m2);
 }
 
 char *floatToChar(float fl){
@@ -227,9 +244,10 @@ void loop() {
         }
       }
       if (waterTempReady){
+        calcWaterTempChar();
         Serial.print("pub we/water_temp ");
-        Serial.println(waterTemp);
-        mqttClient.publish(PUB_WATER_TEMP, floatToChar(waterTemp));
+        Serial.println(waterTempChar);
+        mqttClient.publish(PUB_WATER_TEMP, waterTempChar);
       }
       lastWaterTempPub = millis();
     }
@@ -363,10 +381,11 @@ void loop() {
         T_NEXT_REQUEST(REQUEST_STATUS_TIMER, TIME_BEFORE_TIMER);
       }
 
+      calcWaterTempChar();
       strcpy(postBody, "api_key=");
       strcat(postBody, THINGSPEAK_APIKEY);
       strcat(postBody, "&field1=");
-      strcat(postBody, floatToChar(waterTemp));
+      strcat(postBody, waterTempChar);
       strcat(postBody, "&field2=");
       strcat(postBody, floatToChar(airTemp));
       strcat(postBody, "&field3=");
