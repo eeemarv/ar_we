@@ -35,7 +35,19 @@
 #define OWM_LON "4.4625334155"
 #endif
 #ifndef THINGSPEAK_OWM_INTERVAL_MIN 
-#define THINGSPEAK_OWM_INTERVAL_MIN 2
+#define THINGSPEAK_OWM_INTERVAL_MIN 5
+#endif
+#ifndef OWM_TIMEOUT
+#define OWM_TIMEOUT 15000
+#endif
+#ifndef THINGSPEAK_TIMEOUT
+#define THINGSPEAK_TIMEOUT 10000
+#endif
+#ifndef OWM_RETRY
+#define OWM_RETRY 5
+#endif
+#ifndef THINGSPEAK_RETRY
+#define THINGSPEAK_RETRY 5
 #endif
 #ifndef SUB_WATER_TEMP
 #define SUB_WATER_TEMP "sens/water_temp"
@@ -59,16 +71,16 @@
 #define PRESENCE_INTERVAL 5000
 #endif
 #ifndef WATER_TEMP_VALID_TIME
-#define WATER_TEMP_VALID_TIME 900000 // 15 min
+#define WATER_TEMP_VALID_TIME 1800000 // 30 min
 #endif
 #ifndef AIR_TEMP_VALID_TIME
-#define AIR_TEMP_VALID_TIME 900000 // 15 min
+#define AIR_TEMP_VALID_TIME 1800000 // 30 min
 #endif
 #ifndef WATER_TEMP_MIN_SAMPLES
-#define WATER_TEMP_MIN_SAMPLES 4
+#define WATER_TEMP_MIN_SAMPLES 8
 #endif
 #ifndef WATER_TEMP_MAX_SAMPLES
-#define WATER_TEMP_MAX_SAMPLES 16
+#define WATER_TEMP_MAX_SAMPLES 32
 #endif
 #ifndef NTP_POOL
 #define NTP_POOL "pool.ntp.org"
@@ -79,13 +91,7 @@
 #ifndef NTP_OFFSET
 #define NTP_OFFSET 0
 #endif
-#ifndef TIME_BEFORE_TIMER
-#define TIME_BEFORE_TIMER 200
-#endif
-#ifndef TIME_BEFORE_OWM 
-#define TIME_BEFORE_OWM 200
-#endif
-#ifndef TIME_BEFORE_THING
-#define TIME_BEFORE_THING 200
+#ifndef REQUEST_INTERVAL_TIME 
+#define REQUEST_INTERVAL_TIME 500
 #endif
 

@@ -13,19 +13,26 @@
 #define REQUEST_STATUS_TIMER 0x01
 #define REQUEST_STATUS_OWM 0x02
 #define REQUEST_STATUS_THING 0x04
+#define TIMER_RETRY 0
 
 #define OWM_SERV "api.openweathermap.org"
 #define OWM_LOC "/data/2.5/weather?units=metric&lang=nl&lat=" OWM_LAT "&lon=" OWM_LON "&appid=" OWM_APIKEY
-#define OWM_TIMEOUT 2000
 #define THINGSPEAK_SERV "api.thingspeak.com"
 #define THINGSPEAK_LOC "/update"
-#define THINGSPEAK_TIMEOUT 2000
 #define TEMP_MUL 100
 
-#define T_NEXT_REQUEST(REQUEST_STATUS, REQUEST_INTERVAL) \
-  requestStatus = REQUEST_STATUS;                        \
-  requestInterval = REQUEST_INTERVAL;                    \
-  lastRequest = millis();                                \
+#define REQUEST_STEP \
+  requestInterval = REQUEST_INTERVAL_TIME; \
+  lastRequest = millis(); \
+  return;
+
+#define REQUEST_RETRY \
+  if (retryRequestCount){ \
+    retryRequestCount--; \
+    REQUEST_STEP; \
+    return; \
+  } \
+  requestStatus = REQUEST_STATUS_TIMER; \
   return;
 
 const byte mac[] = {0xDE, 0xAD, MAC_4_LAST};
@@ -41,9 +48,11 @@ uint32_t mqttLastReconnectAttempt = 0;
 uint8_t requestStatus = REQUEST_STATUS_TIMER;
 uint32_t lastRequest = 0;
 uint32_t requestInterval = 0;
+uint8_t retryRequestCount;
 
-uint8_t newOwmSample = 0;
-uint8_t lastOwmSample = 0;
+uint8_t newOwmSample;
+uint8_t lastOwmSample = -1;
+
 
 DynamicJsonDocument owmDoc(2048);
 StaticJsonDocument<400> owmFilter;
@@ -87,10 +96,9 @@ void mqttCallback(char *topic, uint8_t *payload, unsigned int length){
       waterTempAcc -= waterTempBuff[waterTempBuffIndex];
     }
     waterTempBuff[waterTempBuffIndex] = newSample;
-    if (waterTempBuffIndex >= WATER_TEMP_MAX_SAMPLES){
+    waterTempBuffIndex++;
+    if (waterTempBuffIndex == WATER_TEMP_MAX_SAMPLES){
       waterTempBuffIndex = 0;
-    } else {
-      waterTempBuffIndex++;
     }
     if (waterTempBuffSize < WATER_TEMP_MAX_SAMPLES) {
       waterTempBuffSize++;
@@ -124,10 +132,14 @@ inline bool mqttReconnect()
 inline void calcWaterTempChar(){
   uint16_t div;
   uint8_t len;
+  int iconv;
   div = waterTempBuffSize * TEMP_MUL;
-  itoa(waterTempAcc / div, waterTempChar, 10);
+  iconv = waterTempAcc / div;
+  itoa(iconv, waterTempChar, 10);
   strcat(waterTempChar, ".");
-  itoa((waterTempAcc % div) / waterTempBuffSize, m2, 10);
+  iconv = (waterTempAcc % div) / waterTempBuffSize;
+  iconv = iconv < 0 ? -iconv : iconv;
+  itoa(iconv, m2, 10);
   len = strlen(m2);
   if (len < 2){
     strcat(waterTempChar, "0");
@@ -140,9 +152,13 @@ inline void calcWaterTempChar(){
 
 char *floatToChar(float fl){
   uint8_t len;
-  itoa((int)floorf(fl), m1, 10);
+  int iconv;
+  iconv = (int) floorf(fl);
+  itoa(iconv, m1, 10);
   strcat(m1, ".");
-  itoa((((int)(fl * 100)) % 100), m2, 10);
+  iconv = ((int) (fl * 100)) % 100;
+  iconv = iconv < 0 ? -iconv : iconv;
+  itoa(iconv, m2, 10);
   len = strlen(m2);
   if (len < 2){
     strcat(m1, "0");
@@ -221,7 +237,7 @@ void setup() {
   owmFilter["rain"]["1h"] = true;
   owmFilter["clouds"]["all"] = true;
 
-  T_NEXT_REQUEST(REQUEST_STATUS_TIMER, TIME_BEFORE_TIMER);
+  requestStatus = REQUEST_STATUS_TIMER;
 }
 
 void loop() {
@@ -245,6 +261,10 @@ void loop() {
       }
       if (waterTempReady){
         calcWaterTempChar();
+        Serial.print("buf: ");
+        Serial.print(waterTempBuffSize);
+        Serial.print(" idx: ");
+        Serial.println(waterTempBuffIndex);
         Serial.print("pub we/water_temp ");
         Serial.println(waterTempChar);
         mqttClient.publish(PUB_WATER_TEMP, waterTempChar);
@@ -297,6 +317,10 @@ void loop() {
   timeClient.update();
   newOwmSample = timeClient.getMinutes() / (int)THINGSPEAK_OWM_INTERVAL_MIN;
 
+  if (lastOwmSample < 0){
+    lastOwmSample = newOwmSample;
+  }
+
   if (newOwmSample != lastOwmSample){
     lastOwmSample = newOwmSample;
     Serial.print("Owm sample > ");
@@ -305,126 +329,146 @@ void loop() {
     Serial.print(timeClient.getMinutes());
     Serial.print(":");
     Serial.println(timeClient.getSeconds());
-    T_NEXT_REQUEST(REQUEST_STATUS_OWM, TIME_BEFORE_OWM)
+    if (requestStatus != REQUEST_STATUS_TIMER){
+      Serial.println("Request trigger not active.");
+      return;
+    }
+    requestStatus = REQUEST_STATUS_OWM;
+    retryRequestCount = OWM_RETRY;
+    REQUEST_STEP;
   }
 
-  if (requestStatus != REQUEST_STATUS_TIMER && millis() - lastRequest > requestInterval){
+  if (!requestStatus){
+    return;
+  }
 
-    if (requestStatus == REQUEST_STATUS_OWM){
-      Serial.println(OWM_SERV OWM_LOC);
+  if (requestStatus == REQUEST_STATUS_TIMER){
+    return;
+  }
 
-      ethOwm.setTimeout(OWM_TIMEOUT);
-      if (!ethOwm.connect(OWM_SERV, 80)) {
-        Serial.println("Owm Connection failed");
-        T_NEXT_REQUEST(REQUEST_STATUS_TIMER, TIME_BEFORE_TIMER);
-      }
-      Serial.println("Owm connected.");
-      ethOwm.print("GET ");
-      ethOwm.print(OWM_LOC);
-      ethOwm.println(" HTTP/1.0");
-      ethOwm.println("Connection: close");
-      if (ethOwm.println() == 0) {
-        Serial.println("Failed to send request");
-        ethOwm.stop();
-        T_NEXT_REQUEST(REQUEST_STATUS_TIMER, TIME_BEFORE_TIMER);
-      }
+  if (millis() - lastRequest < requestInterval){
+    return;
+  }
 
-      ethOwm.readBytesUntil('\r', httpResponseStatus, sizeof(httpResponseStatus));
-      if (strcmp(httpResponseStatus, "HTTP/1.1 200 OK") != 0) {
-        Serial.print("Unexpected response: ");
-        Serial.println(httpResponseStatus);
-        ethOwm.stop();
-        T_NEXT_REQUEST(REQUEST_STATUS_TIMER, TIME_BEFORE_TIMER);
-      }
+  if (requestStatus == REQUEST_STATUS_OWM){
+    Serial.println(OWM_SERV OWM_LOC);
 
-      // Skip HTTP headers
-      if (!ethOwm.find(endOfHeaders)) {
-        Serial.println("Invalid response");
-        ethOwm.stop();
-        T_NEXT_REQUEST(REQUEST_STATUS_TIMER, TIME_BEFORE_TIMER);        
-      }
-
-      // Parse JSON object
-      deserErr = deserializeJson(owmDoc, ethOwm, DeserializationOption::Filter(owmFilter));
-      if (deserErr) {
-        Serial.print("deserializeJson() failed: ");
-        Serial.println(deserErr.f_str());
-        ethOwm.stop();
-        T_NEXT_REQUEST(REQUEST_STATUS_TIMER, TIME_BEFORE_TIMER);
-      }
-
+    ethOwm.setTimeout(OWM_TIMEOUT);
+    if (!ethOwm.connect(OWM_SERV, 80)) {
+      Serial.println("Owm Connection failed");
+      REQUEST_RETRY;
+    }
+    Serial.println("Owm connected.");
+    ethOwm.print("GET ");
+    ethOwm.print(OWM_LOC);
+    ethOwm.println(" HTTP/1.0");
+    ethOwm.println("Connection: close");
+    if (ethOwm.println() == 0) {
+      Serial.println("Failed to send request");
       ethOwm.stop();
-
-      if (owmDoc.isNull()){
-        Serial.println("owmDoc is null.");
-        T_NEXT_REQUEST(REQUEST_STATUS_TIMER, TIME_BEFORE_TIMER);
-      }
-      Serial.println("owmDoc: ");
-      serializeJsonPretty(owmDoc, Serial);
-      if (owmDoc["main"]["temp"] == "null"){
-        Serial.println("owm air temp is null.");
-        T_NEXT_REQUEST(REQUEST_STATUS_TIMER, TIME_BEFORE_TIMER);
-      }
-      airTemp = owmDoc["main"]["temp"].as<float>();
-      lastAirTempSample = millis();
-      airTempReady = true;
-      T_NEXT_REQUEST(REQUEST_STATUS_THING, TIME_BEFORE_THING);
+      REQUEST_RETRY;
     }
 
-    if (requestStatus == REQUEST_STATUS_THING){
-      if (!waterTempReady || !airTempReady){
-        Serial.println("no POST to Thingspeak channel ");
-        Serial.print("waterTempReady: ");
-        Serial.println(waterTempReady ? "yes" : "no");
-        Serial.print("airTempReady: ");
-        Serial.println(airTempReady ? "yes" : "no");
-        T_NEXT_REQUEST(REQUEST_STATUS_TIMER, TIME_BEFORE_TIMER);
-      }
+    ethOwm.readBytesUntil('\r', httpResponseStatus, sizeof(httpResponseStatus));
+    if (strcmp(httpResponseStatus, "HTTP/1.1 200 OK") != 0) {
+      Serial.print("Unexpected response: ");
+      Serial.println(httpResponseStatus);
+      ethOwm.stop();
+      REQUEST_RETRY;
+    }
 
-      calcWaterTempChar();
-      strcpy(postBody, "api_key=");
-      strcat(postBody, THINGSPEAK_APIKEY);
-      strcat(postBody, "&field1=");
-      strcat(postBody, waterTempChar);
-      strcat(postBody, "&field2=");
-      strcat(postBody, floatToChar(airTemp));
-      strcat(postBody, "&field3=");
-      strcat(postBody, intToChar(owmDoc["main"]["pressure"].as<signed int>()));
-      strcat(postBody, "&field4=");
-      strcat(postBody, intToChar(owmDoc["main"]["humidity"].as<signed int>()));
-      strcat(postBody, "&field5=");
-      strcat(postBody, floatToChar(owmDoc["wind"]["speed"].as<float>()));
-      strcat(postBody, "&field6=");
-      strcat(postBody, floatToChar(owmDoc["rain"]["1h"].as<float>()));
-      strcat(postBody, "&field7=");
-      strcat(postBody, intToChar(owmDoc["clouds"]["all"].as<signed int>()));
+    // Skip HTTP headers
+    if (!ethOwm.find(endOfHeaders)) {
+      Serial.println("Invalid response");
+      ethOwm.stop();
+      REQUEST_RETRY;      
+    }
 
-      Serial.println("POST to thingspeak.com channel: ");
-      Serial.println(postBody);
+    // Parse JSON object
+    deserErr = deserializeJson(owmDoc, ethOwm, DeserializationOption::Filter(owmFilter));
+    if (deserErr) {
+      Serial.print("deserializeJson() failed: ");
+      Serial.println(deserErr.f_str());
+      ethOwm.stop();
+      REQUEST_RETRY;
+    }
 
-      ethThing.setTimeout(THINGSPEAK_TIMEOUT);
-      if (!ethThing.connect(THINGSPEAK_SERV, 80)) {
-        Serial.println("Thingspeak Connection failed");
-        T_NEXT_REQUEST(REQUEST_STATUS_TIMER, TIME_BEFORE_TIMER);
-      }
-      Serial.println("Thingspeak connected.");
-      ethThing.print("POST ");
-      ethThing.print(THINGSPEAK_LOC);
-      ethThing.println(" HTTP/1.0");
-      ethThing.println("Connection: close");
-      ethThing.println("Content-Type: application/x-www-form-urlencoded");
-      ethThing.print("Content-Length:");
-      ethThing.println(strlen(postBody));
-      if (ethThing.println() == 0) {
-        Serial.println("Failed to send request");
-        ethThing.stop();
-        T_NEXT_REQUEST(REQUEST_STATUS_TIMER, TIME_BEFORE_TIMER);
-      }
-      ethThing.print(postBody);
-      ethThing.flush();
+    ethOwm.stop();
+
+    if (owmDoc.isNull()){
+      Serial.println("owmDoc is null.");
+      REQUEST_RETRY;
+    }
+    Serial.println("owmDoc: ");
+    serializeJsonPretty(owmDoc, Serial);
+    if (owmDoc["main"]["temp"] == "null"){
+      Serial.println("owm air temp is null.");
+      REQUEST_RETRY;
+    }
+    airTemp = owmDoc["main"]["temp"].as<float>();
+    lastAirTempSample = millis();
+    airTempReady = true;
+
+    requestStatus = REQUEST_STATUS_THING;
+    retryRequestCount = THINGSPEAK_RETRY;
+    REQUEST_STEP;
+  }
+
+  if (requestStatus == REQUEST_STATUS_THING){
+    if (!waterTempReady || !airTempReady){
+      Serial.println("no POST to Thingspeak channel ");
+      Serial.print("waterTempReady: ");
+      Serial.println(waterTempReady ? "yes" : "no");
+      Serial.print("airTempReady: ");
+      Serial.println(airTempReady ? "yes" : "no");
+
+      requestStatus = REQUEST_STATUS_TIMER;
+      return;
+    }
+
+    calcWaterTempChar();
+    strcpy(postBody, "api_key=");
+    strcat(postBody, THINGSPEAK_APIKEY);
+    strcat(postBody, "&field1=");
+    strcat(postBody, waterTempChar);
+    strcat(postBody, "&field2=");
+    strcat(postBody, floatToChar(airTemp));
+    strcat(postBody, "&field3=");
+    strcat(postBody, intToChar(owmDoc["main"]["pressure"].as<signed int>()));
+    strcat(postBody, "&field4=");
+    strcat(postBody, intToChar(owmDoc["main"]["humidity"].as<signed int>()));
+    strcat(postBody, "&field5=");
+    strcat(postBody, floatToChar(owmDoc["wind"]["speed"].as<float>()));
+    strcat(postBody, "&field6=");
+    strcat(postBody, floatToChar(owmDoc["rain"]["1h"].as<float>()));
+    strcat(postBody, "&field7=");
+    strcat(postBody, intToChar(owmDoc["clouds"]["all"].as<signed int>()));
+
+    Serial.println("POST to thingspeak.com channel: ");
+    Serial.println(postBody);
+
+    ethThing.setTimeout(THINGSPEAK_TIMEOUT);
+    if (!ethThing.connect(THINGSPEAK_SERV, 80)) {
+      Serial.println("Thingspeak Connection failed");
+      REQUEST_RETRY;
+    }
+    Serial.println("Thingspeak connected.");
+    ethThing.print("POST ");
+    ethThing.print(THINGSPEAK_LOC);
+    ethThing.println(" HTTP/1.0");
+    ethThing.println("Connection: close");
+    ethThing.println("Content-Type: application/x-www-form-urlencoded");
+    ethThing.print("Content-Length:");
+    ethThing.println(strlen(postBody));
+    if (ethThing.println() == 0) {
+      Serial.println("Failed to send request");
       ethThing.stop();
-
-      T_NEXT_REQUEST(REQUEST_STATUS_TIMER, TIME_BEFORE_TIMER);
+      REQUEST_RETRY;
     }
+    ethThing.print(postBody);
+    ethThing.flush();
+    ethThing.stop();
+
+    requestStatus = REQUEST_STATUS_TIMER;
   }
 }
