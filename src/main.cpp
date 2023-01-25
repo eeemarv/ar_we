@@ -58,7 +58,6 @@ DynamicJsonDocument owmDoc(2048);
 StaticJsonDocument<400> owmFilter;
 char postBody[1024];
 char m1[12];
-char m2[12];
 
 float airTemp;
 bool waterTempReady = false;
@@ -131,42 +130,14 @@ inline bool mqttReconnect()
 
 inline void calcWaterTempChar(){
   uint16_t div;
-  uint8_t len;
-  int iconv;
+  float fl;
   div = waterTempBuffSize * TEMP_MUL;
-  iconv = waterTempAcc / div;
-  itoa(iconv, waterTempChar, 10);
-  strcat(waterTempChar, ".");
-  iconv = (waterTempAcc % div) / waterTempBuffSize;
-  iconv = iconv < 0 ? -iconv : iconv;
-  itoa(iconv, m2, 10);
-  len = strlen(m2);
-  if (len < 2){
-    strcat(waterTempChar, "0");
-    if (len == 0){
-      strcat(waterTempChar, "0");      
-    }
-  }
-  strcat(waterTempChar, m2);
+  fl = ((float) waterTempAcc) / ((float) div);
+  snprintf(waterTempChar, sizeof(waterTempChar), "%.2f", fl);
 }
 
 char *floatToChar(float fl){
-  uint8_t len;
-  int iconv;
-  iconv = (int) floorf(fl);
-  itoa(iconv, m1, 10);
-  strcat(m1, ".");
-  iconv = ((int) (fl * 100)) % 100;
-  iconv = iconv < 0 ? -iconv : iconv;
-  itoa(iconv, m2, 10);
-  len = strlen(m2);
-  if (len < 2){
-    strcat(m1, "0");
-    if (len == 0){
-      strcat(m1, "0");      
-    }
-  }
-  strcat(m1, m2);
+  snprintf(m1, sizeof(m1), "%.2f", fl);
   return m1;
 }
 
@@ -399,12 +370,14 @@ void loop() {
       Serial.println("owmDoc is null.");
       REQUEST_RETRY;
     }
+
     Serial.println("owmDoc: ");
     serializeJsonPretty(owmDoc, Serial);
     if (owmDoc["main"]["temp"] == "null"){
       Serial.println("owm air temp is null.");
       REQUEST_RETRY;
     }
+
     airTemp = owmDoc["main"]["temp"].as<float>();
     lastAirTempSample = millis();
     airTempReady = true;
