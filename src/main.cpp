@@ -134,10 +134,16 @@ inline void calcWaterTempChar(){
   div = waterTempBuffSize * TEMP_MUL;
   fl = ((float) waterTempAcc) / ((float) div);
   snprintf(waterTempChar, sizeof(waterTempChar), "%.2f", fl);
+  if (strcmp(waterTempChar, "-0.00") == 0){
+    strcpy(waterTempChar, "0.00");
+  }
 }
 
 char *floatToChar(float fl){
   snprintf(m1, sizeof(m1), "%.2f", fl);
+  if (strcmp(m1, "-0.00") == 0){
+    strcpy(m1, "0.00");
+  }
   return m1;
 }
 
